@@ -55,6 +55,8 @@ func (ch *ConsistentHash) AddNode(node string){
 	 for i:= 0 ; i < ch.replicas; i++ {
 		key := ch.hashFunc([]byte(node + strconv.Itoa(i)))
 		ch.virtualNodes = append(ch.virtualNodes, key)
+
+		//This ensures that each key in the ring map has a unique set of values.
 		if _, ok := ch.ring[key]; !ok {
 			ch.ring[key] = make([]interface{}, 0)
 		}
@@ -77,11 +79,62 @@ func (ch *ConsistentHash) AddNode(node string){
 	fmt.Println("-----")
 }
 
+func (ch *ConsistentHash)GetNode(node string) string{
+	ch.mutex.RLock()
+	defer ch.mutex.RUnlock()
+   
+	key := ch.hashFunc([]byte(node))
+	//sort and search the index of the first virtual node greater than the 
+	index := sort.Search(len(ch.virtualNodes), func(i int) bool {
+		return ch.virtualNodes[i] >= key
+	}) % len(ch.virtualNodes)
+    
+	res := ch.ring[ch.virtualNodes[index]]
+	return res[0].(string)
+}
+
+func (ch *ConsistentHash)DeleteVirtualNodes(node string){
+	for i:= 0;i<ch.replicas;i++{
+		key := ch.hashFunc([]byte(node + strconv.Itoa(i)))
+		for i,k := range ch.virtualNodes{
+			if k == key {
+				ch.virtualNodes = append(ch.virtualNodes[:i],ch.virtualNodes[i+1:]...)
+				delete(ch.ring,key)
+				break
+			}
+		}
+
+	}
+	for _, key := range ch.virtualNodes {
+		fmt.Println(key, "-", ch.ring[key])
+	}
+	fmt.Println("Ring:")
+	for key, values := range ch.ring {
+		fmt.Println(key, "-", values)
+	}
+	
+}
+
+func (ch *ConsistentHash)DeleteNode (node string){
+	ch.mutex.Lock()
+	defer ch.mutex.Unlock()
+	ch.DeleteVirtualNodes(node)
+	delete(ch.nodes,node)
+	fmt.Println("-----")
+	for key, _:= range ch.nodes {
+		fmt.Println(key, "-", ch.nodes[key])
+	}
+	fmt.Println("-----")
+}
+
 func main() {
 	ch :=  newConsistentHash(minReplicas)
 	for i :=0 ; i< bucketSize; i++{
 		ch.AddNode("localhost:" + strconv.Itoa(i))
 	}
+	//res := ch.GetNode("localhost:" + strconv.Itoa(1))
+	ch.DeleteNode("localhost:" + strconv.Itoa(1))
+	//fmt.Println(res, "result")
 	
 	router := gin.Default()
     router.GET("/hello", hello)

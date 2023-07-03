@@ -3,28 +3,86 @@ package main
 import (
 	"net/http"
 	"sync"
+	"sort"
+	"fmt"
+	"strconv"
+	"github.com/spaolacci/murmur3"
 	"github.com/gin-gonic/gin"
 )
 
-//data structure for the hash ring
-type HashRing struct{
-	hashFunc //for the key to be hashed
-	replicas int //Number of virtual nodes for each node
-	keys   []uint64 //sorted hashkeys
-	ring map[uint64][] any
-	nodes  map[string]lang.PlaceholderType
-	hashMap map[int]string //Map the hash key to node
-	mutex sync.RWMutex //locking while adding/deleting nodes - thread safety
+const (
+	minReplicas = 3
+	bucketSize = 3
+)
+
+type ConsistentHash struct{
+ hashFunc func(data []byte) uint64	
+ replicas int //Number of virtual nodes
+ virtualNodes [] uint64 //List of virtual node keys
+ ring map[uint64][]interface {}   //hashmap to map hashed virtual node keys to the node
+//  minWeight int64 
+//  maxWeight int64
+ nodes map[string]bool //Hash map to keep track of nodes
+ mutex sync.RWMutex
 }
-//Add node to hash ring
 
-//Remove node from hash ring
+/** Functions to implement
+*
+* 1. AddNode - Adds a virtual node
+* 2. AddWithReplicas 
+* 3. AddWithWeight
+* 4. Remove a node
+* 5. Get
+*/
 
+func newConsistentHash(replicas int) *ConsistentHash{
+	if replicas < minReplicas{
+		replicas = minReplicas
+	}
+	return &ConsistentHash{
+		hashFunc : murmur3.Sum64,
+		replicas : replicas,
+		ring:    make(map[uint64][]any),
+		nodes:    map[string]bool{},
+	}
 
-//Get a node
+}
 
-//Remove a key
+func (ch *ConsistentHash) AddNode(node string){
+     ch.mutex.Lock()
+	 defer ch.mutex.Unlock()
+	 ch.nodes[node] = true
+	 for i:= 0 ; i < ch.replicas; i++ {
+		key := ch.hashFunc([]byte(node + strconv.Itoa(i)))
+		ch.virtualNodes = append(ch.virtualNodes, key)
+		if _, ok := ch.ring[key]; !ok {
+			ch.ring[key] = make([]interface{}, 0)
+		}
+		ch.ring[key] = append(ch.ring[key], node)
+	 }
+	 sort.Slice(ch.virtualNodes, func(i, j int) bool {
+		return ch.virtualNodes[i] < ch.virtualNodes[j]
+	})
+	for _, key := range ch.virtualNodes {
+		fmt.Println(key, "-", ch.ring[key])
+	}
+	fmt.Println("Ring:")
+	for key, values := range ch.ring {
+		fmt.Println(key, "-", values)
+	}
+	fmt.Println("-----")
+	for key, _:= range ch.nodes {
+		fmt.Println(key, "-", ch.nodes[key])
+	}
+	fmt.Println("-----")
+}
+
 func main() {
+	ch :=  newConsistentHash(minReplicas)
+	for i :=0 ; i< bucketSize; i++{
+		ch.AddNode("localhost:" + strconv.Itoa(i))
+	}
+	
 	router := gin.Default()
     router.GET("/hello", hello)
     router.Run("localhost:8080")

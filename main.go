@@ -12,6 +12,7 @@ import (
 
 const (
 	minReplicas = 3
+	maxWeight = 100
 	bucketSize = 3
 )
 
@@ -45,6 +46,22 @@ func newConsistentHash(replicas int) *ConsistentHash{
 		ring:    make(map[uint64][]any),
 		nodes:    map[string]bool{},
 	}
+
+}
+
+func (ch *ConsistentHash) AddWithWeight (node string, weight int){
+	present := ch.nodes[node]
+	fmt.Println(ch.nodes[node], "node")
+	if present == false{
+		ch.replicas = ch.replicas * weight / maxWeight
+		ch.AddNode(node)
+	} else {
+		ch.updateWeight(node, weight)
+	}
+	
+}
+
+func (ch *ConsistentHash) updateWeight(node string, weight int){
 
 }
 
@@ -134,6 +151,7 @@ func main() {
 	}
 	//res := ch.GetNode("localhost:" + strconv.Itoa(1))
 	ch.DeleteNode("localhost:" + strconv.Itoa(1))
+	ch.AddWithWeight("localhost:" + strconv.Itoa(4), 100)
 	//fmt.Println(res, "result")
 	
 	router := gin.Default()

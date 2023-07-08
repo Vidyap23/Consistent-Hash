@@ -12,17 +12,16 @@ import (
 
 const (
 	minReplicas = 3
+	maxReplicas = 10
 	maxWeight = 100
 	bucketSize = 3
 )
 
 type ConsistentHash struct{
  hashFunc func(data []byte) uint64	
- replicas int //Number of virtual nodes
  virtualNodes [] uint64 //List of virtual node keys
  ring map[uint64][]interface {}   //hashmap to map hashed virtual node keys to the node
-//  minWeight int64 
-//  maxWeight int64
+ nodeWeights map[string]int //keep weight of each node bucket
  nodes map[string]bool //Hash map to keep track of nodes
  mutex sync.RWMutex
 }
@@ -36,28 +35,31 @@ type ConsistentHash struct{
 * 5. Get
 */
 
-func newConsistentHash(replicas int) *ConsistentHash{
-	if replicas < minReplicas{
-		replicas = minReplicas
-	}
+func newConsistentHash() *ConsistentHash{
 	return &ConsistentHash{
 		hashFunc : murmur3.Sum64,
-		replicas : replicas,
+		nodeWeights: make(map[string]int),
 		ring:    make(map[uint64][]any),
 		nodes:    map[string]bool{},
 	}
-
 }
 
 func (ch *ConsistentHash) AddWithWeight (node string, weight int){
+	ch.mutex.Lock()
+	defer ch.mutex.Unlock()
 	present := ch.nodes[node]
 	fmt.Println(ch.nodes[node], "node")
 	if present == false{
-		ch.replicas = ch.replicas * weight / maxWeight
-		ch.AddNode(node)
+		if ch.nodeWeights[node] == weight{
+			fmt.Println("Node weight is the same, no update")
+			return
+		}
+		ch.nodes[node] = true
+		ch.nodeWeights[node] = minReplicas * weight/maxWeight
 	} else {
 		ch.updateWeight(node, weight)
 	}
+	ch.rebuild()
 	
 }
 
@@ -69,31 +71,62 @@ func (ch *ConsistentHash) AddNode(node string){
      ch.mutex.Lock()
 	 defer ch.mutex.Unlock()
 	 ch.nodes[node] = true
-	 for i:= 0 ; i < ch.replicas; i++ {
-		key := ch.hashFunc([]byte(node + strconv.Itoa(i)))
-		ch.virtualNodes = append(ch.virtualNodes, key)
+	 ch.nodeWeights[node] = minReplicas
+	 ch.rebuild()
+}
 
-		//This ensures that each key in the ring map has a unique set of values.
-		if _, ok := ch.ring[key]; !ok {
-			ch.ring[key] = make([]interface{}, 0)
-		}
-		ch.ring[key] = append(ch.ring[key], node)
-	 }
-	 sort.Slice(ch.virtualNodes, func(i, j int) bool {
-		return ch.virtualNodes[i] < ch.virtualNodes[j]
-	})
-	for _, key := range ch.virtualNodes {
-		fmt.Println(key, "-", ch.ring[key])
+func (ch *ConsistentHash) rebuild() {
+    
+
+	fmt.Println("node weight values------")
+    for key,values := range ch.nodeWeights{
+		fmt.Println(key, "-", values)
 	}
-	fmt.Println("Ring:")
+
+	// Clear the current ring
+	ch.ring = make(map[uint64][]any)
+	fmt.Println("Old ring values")
 	for key, values := range ch.ring {
 		fmt.Println(key, "-", values)
 	}
-	fmt.Println("-----")
-	for key, _:= range ch.nodes {
-		fmt.Println(key, "-", ch.nodes[key])
+	// Create a hashmap index for virtualNodes
+	index := make(map[uint64]bool)
+
+	// Populate the index from existing virtualNodes
+	for _, key := range ch.virtualNodes {
+		index[key] = true
+	}
+
+	// Recreate the ring with updated virtual nodes
+	for node := range ch.nodes {
+		fmt.Println(node, ch.nodeWeights[node], "inside rebuild")
+		for i := 0; i < ch.nodeWeights[node]; i++ {
+			key := ch.hashFunc([]byte(node + strconv.Itoa(i)))
+			if _, ok := index[key]; !ok {
+				// Append to virtualNodes only if key is not present in the index
+				ch.virtualNodes = append(ch.virtualNodes, key)
+				index[key] = true
+			}
+			if _, ok := ch.ring[key]; !ok {
+				ch.ring[key] =  make([]interface{}, 0)
+			ch.ring[key] = append(ch.ring[key], node)
+		}
+	}
+}
+
+	sort.Slice(ch.virtualNodes, func(i, j int) bool {
+		return ch.virtualNodes[i] < ch.virtualNodes[j]
+	})
+
+	// Transfer the existing items from the old ring to the new ring
+	
+	// Print the updated state of the ring
+	fmt.Println("Rebuilt Ring:")
+	for _, key := range ch.virtualNodes {
+		fmt.Println(key, "-", ch.ring[key])
 	}
 	fmt.Println("-----")
+
 }
 
 func (ch *ConsistentHash)GetNode(node string) string{
@@ -111,7 +144,8 @@ func (ch *ConsistentHash)GetNode(node string) string{
 }
 
 func (ch *ConsistentHash)DeleteVirtualNodes(node string){
-	for i:= 0;i<ch.replicas;i++{
+	weight := ch.nodeWeights[node]
+	for i:= 0;i<weight;i++{
 		key := ch.hashFunc([]byte(node + strconv.Itoa(i)))
 		for i,k := range ch.virtualNodes{
 			if k == key {
@@ -145,13 +179,13 @@ func (ch *ConsistentHash)DeleteNode (node string){
 }
 
 func main() {
-	ch :=  newConsistentHash(minReplicas)
+	ch :=  newConsistentHash()
 	for i :=0 ; i< bucketSize; i++{
 		ch.AddNode("localhost:" + strconv.Itoa(i))
 	}
 	//res := ch.GetNode("localhost:" + strconv.Itoa(1))
-	ch.DeleteNode("localhost:" + strconv.Itoa(1))
-	ch.AddWithWeight("localhost:" + strconv.Itoa(4), 100)
+	//ch.DeleteNode("localhost:" + strconv.Itoa(1))
+	ch.AddWithWeight("localhost:" + strconv.Itoa(4), 40)
 	//fmt.Println(res, "result")
 	
 	router := gin.Default()
